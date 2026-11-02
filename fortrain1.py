@@ -1,10 +1,10 @@
 # ==========================================
-# [Colab Pro/A100] LLaMA 3.1 8B Instruct 한국어 뉴스 요약 - 학습 전용
+# [AstraGo / MIG 3g.40gb] LLaMA 3.1 8B Instruct 한국어 뉴스 요약 - 학습 전용
 # 1만 학습 / 500개 검증, 16-bit LoRA, 3 epoch, Early Stopping
 # ★ 원본 대비 변경점은 "# ★" 주석으로 표시 (길이 유도 + 1만 건 규모 조정만)
-# 1. 런타임 > 런타임 유형 변경 > A100 GPU
-# 2. 🔑 보안 비밀에 HF_TOKEN(write) 추가, "노트북 액세스" 켜기
-# ※ 패키지 설치 후 오류가 나면 런타임 > 세션 다시 시작 후 재실행
+# 1. 워크로드 변수에 HF_TOKEN(write 권한) 추가, 명령어: python train_llama_summary_10k_astrago.py
+# 2. train_original.json은 input/dataset에서 자동 탐색
+# 3. ※ 영구 볼륨이 없어 결과는 로컬(/tmp)에 두고 Hugging Face Hub 업로드로 보존
 # ※ 대조군(길이 유도 없음): EOS_WEIGHT=1.0, MAX_SUMMARY_CHARS=None, REPO_NAME/final_dir 이름 변경
 # ==========================================
 import sys
@@ -35,24 +35,42 @@ from transformers import (
 from transformers.trainer_utils import get_last_checkpoint
 from peft import LoraConfig, get_peft_model
 from huggingface_hub import login
-from google.colab import drive, userdata
+import glob, shutil
 
-assert torch.cuda.is_available(), "GPU가 없습니다. A100 GPU로 런타임 설정을 변경해주세요."
+assert torch.cuda.is_available(), "GPU가 없습니다. 리소스 프리셋에서 GPU(MIG)를 선택했는지 확인해주세요."
 print("GPU:", torch.cuda.get_device_name(0))
 
 # ==========================================
 # [1] 설정 및 로그인
 # ==========================================
-drive.mount("/content/drive")
-
-HF_TOKEN = userdata.get("HF_TOKEN")
+HF_TOKEN = os.environ["HF_TOKEN"]
 HF_USERNAME = "chaeryu"
 REPO_NAME = "llama-3.1-8b-instruct-summary-ko-10k"   # ★ 1만 건
 login(token=HF_TOKEN)
 
-TRAIN_PATH = "/content/drive/MyDrive/train_original.json"
-OUT_DIR = "/content/drive/MyDrive/summary_train"
+def find_train_file(name="train_original.json", max_depth=4):
+    """input/dataset 우선 탐색 → 실패 시 주요 경로를 깊이 제한(4)으로 탐색"""
+    for d in ["/input/dataset", "input/dataset", "/input", "input", "/dataset", "."]:
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return p
+    roots = ["/input", "/dataset", "/data", "/mnt", "/workspace", os.getcwd()]
+    for root in roots:
+        if root in ("", "/") or not os.path.isdir(root):
+            continue
+        base = root.rstrip("/").count("/")
+        for cur, dirs, files in os.walk(root):
+            if cur.count("/") - base >= max_depth:
+                dirs[:] = []
+            if name in files:
+                return os.path.join(cur, name)
+    raise FileNotFoundError(f"{name}을(를) 찾지 못했습니다. 탐색 경로: input/dataset, {roots}")
+
+TRAIN_PATH = find_train_file()
+print("TRAIN_PATH:", TRAIN_PATH)
+OUT_DIR = "/tmp/summary_train"      # 영구 볼륨 없음 → 로컬 임시 경로 (결과는 Hub에 업로드됨)
 os.makedirs(OUT_DIR, exist_ok=True)
+print(f"디스크 여유(/tmp): {shutil.disk_usage('/tmp').free / 1e9:.0f}GB (모델 16GB + 체크포인트 여유 필요)")
 
 MODEL_ID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 MAX_OUTPUT_LEN = 256
@@ -263,4 +281,4 @@ final_dir = f"{OUT_DIR}/final_model_instruct_10k"   # ★ 1만 건
 trainer.model.save_pretrained(final_dir)
 tokenizer.save_pretrained(final_dir)
 trainer.push_to_hub()
-print("🎉 학습, 저장, 허브 업로드 완료")
+print(f"🎉 학습, 저장, 허브 업로드 완료 → https://huggingface.co/{HF_USERNAME}/{REPO_NAME}")
