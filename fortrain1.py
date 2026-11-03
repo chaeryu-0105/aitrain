@@ -12,9 +12,10 @@ import subprocess
 
 subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "torchao"])
 subprocess.run([
-    sys.executable, "-m", "pip", "install", "-q", "-U",
-    "transformers", "peft", "datasets", "accelerate"
-])
+    sys.executable, "-m", "pip", "install", "-q",
+    "transformers==4.57.1", "peft<0.18", "accelerate<1.11",
+    "huggingface_hub<1.0", "datasets"
+], check=True)
 
 import json
 import torch
